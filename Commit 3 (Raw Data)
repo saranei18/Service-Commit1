@@ -1,0 +1,248 @@
+#include <Windows.h>
+#include <tchar.h>
+#include <strsafe.h>
+#include<iostream>
+
+using namespace std;
+
+#define SVCNAME TEXT("MFService")
+wchar_t s[] = L"MFService";
+wchar_t* SVCNAME1 = s;
+
+SERVICE_STATUS gSvcStatus;
+SERVICE_STATUS_HANDLE gSvcStatusHandle;
+HANDLE ghSvcStopEvent = NULL;
+
+void SvcInstall(void);
+
+void WINAPI SvcCtrlHandler( DWORD );
+void WINAPI SvcMain(DWORD, LPTSTR*);
+
+void ReportSvcStatus(DWORD, DWORD, DWORD);
+void SvcInit(DWORD, LPTSTR*);
+void SvcReportEvent(LPTSTR);
+
+//Main Function -> Entry point for the process
+
+
+//------------Main Function Definition---------------//
+int main(int argc, TCHAR *argv[])
+{
+	//Local variables Decleration
+	BOOL bStServiceCtrlDispatcher = FALSE;
+
+	//Service Install
+	if (lstrcmpi(argv[1], TEXT("install")) == 0)
+	{
+		SvcInstall();
+		cout << "Service Installation Success" << endl;
+		return 0;
+	}
+	else
+	{
+		//Fill the Service Table Entry (2D Array)
+		SERVICE_TABLE_ENTRY DispatchTable[] =
+		{
+			{ SVCNAME1, (LPSERVICE_MAIN_FUNCTION)SvcMain },
+			{ NULL, NULL}
+		};
+
+		//To Connect Service Main & Dispatch Table
+		bStServiceCtrlDispatcher = StartServiceCtrlDispatcher(DispatchTable);
+		
+		if (FALSE == bStServiceCtrlDispatcher)
+		{
+			cout << "StartServiceCtrlDispatcher Setup Failed" << endl;
+			return 0;
+		}
+		else
+		{
+			cout << "StartServiceCtrlDispatcher Setup Success" << endl;
+		}
+		
+		cout << "Main function END" << endl;
+	}//------------END of Main Function---------------//
+	return 0;
+
+}
+
+
+//------------SvcInstall Function Definition---------------//
+VOID SvcInstall()
+{
+	SC_HANDLE schSCManager;
+	SC_HANDLE schService;
+	TCHAR szPath[MAX_PATH];
+
+	if (!GetModuleFileName(NULL, szPath, MAX_PATH))
+	{
+		cout << "Cannot Install Service & Error no is - "<<GetLastError()<< endl;
+		return;
+	}
+
+	//Get a handle to the SCM database
+
+	schSCManager = OpenSCManager(
+		NULL,
+		NULL,
+		SC_MANAGER_ALL_ACCESS);
+
+	if (NULL == schSCManager)
+	{
+		cout << "OpenSCManager failed and Error no is - " << GetLastError() << endl;
+		return;
+	}
+
+	//Create the Service
+
+	schService = CreateService(
+		schSCManager,
+		SVCNAME,
+		SVCNAME,
+		SERVICE_ALL_ACCESS,
+		SERVICE_WIN32_OWN_PROCESS,
+		SERVICE_DEMAND_START,
+		SERVICE_ERROR_NORMAL,
+		szPath,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL);
+
+	if (schService == NULL)
+	{
+		cout << "CreateService Failed" << GetLastError() << endl;
+		CloseServiceHandle(schSCManager);
+		return;
+	}
+	else
+	{
+		cout << "Service installed SuccessFully" << endl;
+	}
+
+	CloseServiceHandle(schService);
+	CloseServiceHandle(schSCManager);
+}//------------END of SvcInstall Function---------------//
+
+ 
+ //------------SvcMain Function Definition---------------//
+VOID WINAPI SvcMain(DWORD dwArgc, LPTSTR* lpszArgv)
+{
+	//Register the Handler Fuction For the service
+
+	gSvcStatusHandle = RegisterServiceCtrlHandler(
+		SVCNAME,
+		SvcCtrlHandler);
+
+	if (0 == gSvcStatusHandle)
+	{
+		cout << "RegisterServiceCtrlHandler Failed" << endl;
+		cout << "Error Code - " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "RegisterServiceCtrlHandler Success" << endl;
+	}
+
+	//STEP -2-> SERVICE_STATUS Initial Setup here
+	gSvcStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+	gSvcStatus.dwServiceSpecificExitCode = 0;
+
+	//Report intital status to the SCM
+
+	ReportSvcStatus(SERVICE_START_PENDING, NO_ERROR, 3000);
+
+	//Perform service-specific initialization and work
+
+	SvcInit(dwArgc, lpszArgv);
+}//------------END of SvcMain Function---------------//
+
+
+//------------SvcInit Function Definition---------------//
+VOID SvcInit(DWORD dwArgc, LPTSTR* lpszArgv)
+{
+
+	//Create an Event
+	//The control Handler, SvcCtrlHandler, signals this event when it 
+	// recieves the stop control code
+
+	ghSvcStopEvent = CreateEvent(
+		NULL,
+		TRUE,
+		FALSE,
+		NULL);
+
+	if (ghSvcStopEvent == NULL)
+	{
+		ReportSvcStatus(SERVICE_STOPPED, GetLastError(), 0);
+		return;
+	}
+
+	//Perform work untilservice stops
+
+	while (1)
+	{
+		//Check whether to stop the service
+		WaitForSingleObject(ghSvcStopEvent, INFINITE);
+
+		ReportSvcStatus(SERVICE_STOPPED, NO_ERROR, 0);
+		return;
+	}
+}//------------END of SvcInit Function---------------//
+
+
+//------------ReportSvcStatus Function Definition---------------//
+VOID ReportSvcStatus(DWORD dwCurrentState, DWORD dwWin32ExitCode, DWORD dwWaitHint)
+{
+	static DWORD dwCheckPoint = 1;
+
+	//Fill in the SERVICE_STATUS_STRUCTURE
+
+	gSvcStatus.dwCurrentState = dwCurrentState;
+	gSvcStatus.dwWin32ExitCode = dwWin32ExitCode;
+	gSvcStatus.dwWaitHint = dwWaitHint;
+
+	if (dwCurrentState == SERVICE_START_PENDING)
+		gSvcStatus.dwControlsAccepted = 0;
+	else
+		gSvcStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP;
+
+	if ((dwCurrentState == SERVICE_RUNNING) ||
+		(dwCurrentState == SERVICE_STOPPED))
+		gSvcStatus.dwCheckPoint = 0;
+	else
+		gSvcStatus.dwCheckPoint = dwCheckPoint++;
+
+	SetServiceStatus(gSvcStatusHandle, &gSvcStatus);
+}//------------END of ReportSvcStatus Function---------------//
+
+
+//------------SvcCtrlHandler Function Definition---------------//
+VOID WINAPI SvcCtrlHandler(DWORD dwCtrl)
+{
+	//Handle the requested control code
+
+	switch (dwCtrl)
+	{
+	case SERVICE_CONTROL_STOP: 
+		ReportSvcStatus(SERVICE_STOP_PENDING, NO_ERROR, 0);
+		SetEvent(ghSvcStopEvent);
+		ReportSvcStatus(gSvcStatus.dwCurrentState, NO_ERROR, 0);
+		return;
+	case SERVICE_CONTROL_INTERROGATE:
+		break;
+	default:
+		break;
+	}
+}//------------END of SvcCtrlHandler Function---------------//
+
+
+
+
+
+
+
+
+
