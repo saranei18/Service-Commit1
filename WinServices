@@ -1,0 +1,814 @@
+#include<iostream>
+#include<Windows.h>
+#include <tchar.h>
+#include <strsafe.h>
+
+#pragma comment(lib, "advapi32.lib")
+
+
+using namespace std;
+
+#define SERVICE_NAME TEXT("MyServiceNew5")
+SERVICE_STATUS ServiceStatus = { 0 };
+/*wchar_t n[] = TEXT("ASPService");
+wchar_t *name = n;*/
+TCHAR hname[MAX_PATH] = L"ASPService";
+
+SERVICE_STATUS_HANDLE hServiceStatusHandle = NULL;
+HANDLE hServiceEvent = NULL;
+void WINAPI ServiceMain(DWORD, LPTSTR*);
+void WINAPI ServiceControlHandler(DWORD dwControl);
+void ServiceReportStatus(DWORD, DWORD, DWORD);
+void ServiceInit(DWORD, LPTSTR*);
+void ServiceInstall(void);
+void ServiceDelete(void);
+void ServiceStart(void);
+void ServiceStop(void);
+void RegKey(void);
+void CreateFile(HKEY);
+
+//MAIN FUNCTION DEFINITION
+int main(int argc, CHAR* argv[])
+{
+	cout << "In main fun Start" << endl;
+
+	BOOL bStServiceCtrlDispatcher = FALSE;
+
+	if (lstrcmpiA(argv[1], "install") == 0)
+	{
+		ServiceInstall();
+		cout << "Installation Success" << endl;
+	}
+	else if (lstrcmpiA(argv[1], "start") == 0)
+	{
+		ServiceStart();
+		cout << "Service Started Successfully" << endl;
+	}
+	else if (lstrcmpiA(argv[1], "stop") == 0)
+	{
+		ServiceStop();
+		cout << "Service Stop Success" << endl;
+	}
+	else if (lstrcmpiA(argv[1], "delete") == 0)
+	{
+		ServiceDelete();
+		cout << "Service Delete Success" << endl;
+	}
+	else
+	{
+		//STEP-1 -> Fill the service Table Entry (2D Array)
+		SERVICE_TABLE_ENTRY DispatchTable[] = {
+			{hname, (LPSERVICE_MAIN_FUNCTION)ServiceMain},
+			{NULL,NULL}
+		};
+		//STEP-2 -> Start Service Control Dispatcher
+		bStServiceCtrlDispatcher = StartServiceCtrlDispatcher(DispatchTable);
+
+		if (FALSE == bStServiceCtrlDispatcher)
+		{
+			cout << "StartServiceCtrlDispatcher Failed" << endl;
+			cout << "Error Code - " << GetLastError() << endl;
+			return 0;
+		}
+		else
+		{
+			cout << "StartServiceCtrlDispatcher Success" << endl;
+		}
+	}
+	cout << "In main function end" << endl;
+	system("PAUSE");
+
+	return 0;
+}//-------------End of Main Function-------------//
+
+
+//-------------ServiceMain Function Definition------------//
+void WINAPI ServiceMain(DWORD dwArgc, LPTSTR* lpArgv)
+{
+	cout << "ServiceMain Start" << endl;
+
+	BOOL bServiceStatus = FALSE;
+
+	//STEP-1 -> Registreing Service CTrl Handler Function to SCM
+	hServiceStatusHandle = RegisterServiceCtrlHandler(
+		SERVICE_NAME,
+		ServiceControlHandler);
+
+	if (NULL == hServiceStatusHandle)
+	{
+		cout << "Registre Service CtrlHandler Failed" << endl;
+		cout << "Error Code" << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "RegisterServiceCtrlHandler Success" << endl;
+	}
+	//STEP-2 -> SERVICE_STATUS Initial Setup
+	ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+	ServiceStatus.dwServiceSpecificExitCode = 0;
+
+	//STEP-3 -> Call Service Report Status for Notifying Initial Setup
+	ServiceReportStatus(
+		SERVICE_START_PENDING,
+		NO_ERROR,
+		3000
+	);
+
+	//STEP-4 -> Check the Service Status
+	bServiceStatus = SetServiceStatus(
+		hServiceStatusHandle,
+		&ServiceStatus
+	);
+
+	if (FALSE == bServiceStatus)
+	{
+		cout << "Service Status Initial Settup Failsed" << endl;
+		cout << "Error Code" << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "Service Status Initial Settup SUCCESS" << endl;
+	}
+	//STEP-5 -> Call ServiceInit Fun
+	ServiceInit(dwArgc, lpArgv);
+	cout << "SErviceMain End" << endl;
+
+}//---------------End of ServiceMain------------//
+//---------------Service Control Handler Definition--------------//
+void WINAPI ServiceControlHandler(DWORD dwControl)
+{
+	cout << "Service Contrl Handler" << endl;
+	switch (dwControl)
+	{
+	case SERVICE_CONTROL_STOP:
+	{
+		//Call ServiceReportStatus Function
+		ServiceReportStatus(SERVICE_STOP_PENDING, NO_ERROR, 0);
+
+		SetEvent(hServiceEvent);
+		cout << "Service Stopped" << endl;
+		break;
+	}
+	default:
+		break;
+	}
+}//---------------End of Service Contrl Handler------------//
+
+void ServiceInit(DWORD dwArgc, LPTSTR* lpArgv)
+{
+	cout << "ServiceInit Start" << endl;
+	//STEP-1 -> Create Event
+	hServiceEvent = CreateEvent(
+		NULL,
+		TRUE,
+		FALSE,
+		NULL);   //Ref the DOCS
+
+	if (NULL == hServiceEvent)
+	{
+		//NOTIFY the SCM for the CurrentStatus
+		cout << "Service Creation Failed" << endl;
+		ServiceReportStatus(SERVICE_STOPPED, NO_ERROR, 0);
+		return;
+	}
+	else
+	{
+		//NOTIFY the SCM for the CurrentStatus
+		ServiceReportStatus(SERVICE_RUNNING, NO_ERROR, 0);
+	}
+
+	//STEP-2 -> Check Whether to stop the Service
+	while (1)
+	{
+		//WaitforSingleObject which wait event to ve Signaled
+		WaitForSingleObject(hServiceEvent, INFINITE);
+		//NOTIFY the SCM for the CurrentStatus
+		ServiceReportStatus(SERVICE_STOPPED, NO_ERROR, 0);
+		return;
+	}
+	cout << "ServiceInit End" << endl;
+}//----------End of ServiceInit------//
+//----------Service Report Status Fun Definitions------//
+void ServiceReportStatus(
+	DWORD dwCurrentState,
+	DWORD dwWin32ExitCode,
+	DWORD dwWaitHint)
+{
+	cout << "ServiceReportStatus Start" << endl;
+	static DWORD dwCheckpoint = 1;
+	BOOL bSetServiceStatus = FALSE;
+
+	//STEP-1 -> Fill the SERVICE_STATUS Struecture
+	ServiceStatus.dwCurrentState = dwCurrentState;
+	ServiceStatus.dwWin32ExitCode = dwWin32ExitCode;
+	ServiceStatus.dwWaitHint = dwWaitHint;
+
+	//STEP-2 -> Check the Current State of Service
+	//Service is about to start
+	if (dwCurrentState == SERVICE_START_PENDING)
+	{
+		ServiceStatus.dwControlsAccepted = 0;
+	}
+	else
+	{
+		ServiceStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP;
+	}
+
+	//STEP-3 -> Progress for Service Operation
+	if ((dwCurrentState == SERVICE_RUNNING) || (dwCurrentState == SERVICE_STOPPED))
+	{
+		ServiceStatus.dwCheckPoint = 0;
+	}
+	else
+	{
+		ServiceStatus.dwCheckPoint = dwCheckpoint++;
+	}
+
+	//STEP-4 -> Notify the current stats of tSCM
+	bSetServiceStatus = SetServiceStatus(
+		hServiceStatusHandle,
+		&ServiceStatus);
+	if (FALSE == bSetServiceStatus)
+	{
+		cout << "Service Status FAILED" << endl;
+		cout << "Error No - " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "Service Status SUCCESs" << endl;
+	}
+	cout << "Service ReportStatus End" << endl;
+}//------------End of ServiceReportStatus Fun Def---------//
+
+
+//------------ServiceInstall Definition---------//
+void ServiceInstall(void)
+{
+	cout << "ServiceInstall Start" << endl;
+
+	SC_HANDLE hScOpenSCManager = NULL;
+	SC_HANDLE hScCreateService = NULL;
+	DWORD dwGetModuleFileName = 0;
+	TCHAR szPath[MAX_PATH];
+
+	//STEP-1 -> GetModuleFileName Get the Executable file from SCM
+	dwGetModuleFileName = GetModuleFileName(
+		NULL,
+		szPath,
+		MAX_PATH);
+
+	if (0 == dwGetModuleFileName)
+	{
+		cout << "Service Installation Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "Successfully install the File\n" << endl;
+	}
+
+	//STEP-2 -> Open the Service Control Manager
+	hScOpenSCManager = OpenSCManager(
+		NULL,
+		NULL,
+		SC_MANAGER_ALL_ACCESS);
+
+	if (NULL == hScOpenSCManager)
+	{
+		cout << "OpenSCManager Failed " << endl;
+		cout << "Error No - " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "OpenSCManager Success" << endl;
+	}
+
+	//STEP-3 -> Create the SErvice
+	hScCreateService = CreateService(
+		hScOpenSCManager,
+		SERVICE_NAME,
+		SERVICE_NAME,
+		SERVICE_ALL_ACCESS,
+		SERVICE_WIN32_OWN_PROCESS,
+		SERVICE_DEMAND_START,
+		SERVICE_ERROR_NORMAL,
+		szPath,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL);
+
+	if (NULL == hScCreateService)
+	{
+		cout << "CreateService Failed " << endl;
+		cout << "Error No - " << GetLastError() << endl;
+		CloseServiceHandle(hScOpenSCManager);
+		return;
+	}
+	else
+	{
+		cout << "CreateService Success" << endl;
+	}
+	/*STEP-4 -> Close the Handle for OpenSCManager
+   and Create Service*/
+	CloseServiceHandle(hScCreateService);
+	CloseServiceHandle(hScOpenSCManager);
+
+	cout << "ServiceInstall End" << endl;
+} //--End of ServiceInstall Definition--------//
+
+
+//------ServiceDelete Definition--------//
+void ServiceDelete(void)
+{
+	cout << "ServiceDelete Start" << endl;
+
+	SC_HANDLE hScOpenSCManager = NULL;
+	SC_HANDLE hScOpenService = NULL;
+	BOOL bDeleteService = FALSE;
+
+	//STEP-1 -> Open the Service Control Manager
+	hScOpenSCManager = OpenSCManager(
+		NULL,
+		NULL,
+		SC_MANAGER_ALL_ACCESS);
+
+	if (NULL == hScOpenSCManager)
+	{
+		cout << "OpenSCManager Failed " << endl;
+		cout << "Error No - " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "OpenSCManager Success" << endl;
+	}
+
+	//STEP-2 -> Open the Service
+	hScOpenService = OpenService(
+		hScOpenSCManager,
+		SERVICE_NAME,
+		SERVICE_ALL_ACCESS);
+
+	if (NULL == hScOpenService)
+	{
+		cout << "OpenService Failed " << endl;
+		cout << "Error No- " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "OpenService Success " << endl;
+	}
+
+	//STEP-3 -> Delete Service
+	bDeleteService = DeleteService(hScOpenService);
+	if (FALSE == bDeleteService)
+	{
+		cout << "Delete Service Failed " << endl;
+		cout << "Error No- " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "Delete Service Success" << endl;
+	}
+
+	/*STEP-4 -> Close the Handle for
+	 SCM and OpenService */
+	CloseServiceHandle(hScOpenService);
+	CloseServiceHandle(hScOpenSCManager);
+	cout << "ServiceDelete End" << endl;
+}
+//---End of ServiceDelete Function-------------//
+
+
+//---------ServiceStart Definitions-----//
+void ServiceStart(void)
+{
+	cout << "Inside ServiceStart Function" << endl;
+
+	BOOL bStartService = FALSE;
+	SERVICE_STATUS_PROCESS SvcStatusProcess;
+	SC_HANDLE hOpenSCManager = NULL;
+	SC_HANDLE hOpenService = NULL;
+	BOOL bQueryServiceStatus = FALSE;
+	DWORD dwBytesNeeded;
+
+	//STEP-1 -> Open Service Control Manager
+	hOpenSCManager = OpenSCManager(
+		NULL,
+		NULL,
+		SC_MANAGER_ALL_ACCESS);
+	if (NULL == hOpenSCManager)
+	{
+		cout << "hOpenSCManager Failed " << endl;
+		cout << "Error no - " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "hOpenSCManager SUccess" << endl;
+	}
+
+	//STEP-2 -> OpenSErvice
+	hOpenService = OpenService(
+		hOpenSCManager,
+		SERVICE_NAME,
+		SC_MANAGER_ALL_ACCESS);
+
+	if (NULL == hOpenService)
+	{
+		cout << "OpenService Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hOpenSCManager);
+		return;
+	}
+	else
+	{
+		cout << "OpenService Success" << endl;
+	}
+
+	//STEP-3 -> Query about current Service Status
+	bQueryServiceStatus = QueryServiceStatusEx(
+		hOpenService,
+		SC_STATUS_PROCESS_INFO,
+		(LPBYTE)&SvcStatusProcess,  //REF docs
+		sizeof(SERVICE_STATUS_PROCESS),
+		&dwBytesNeeded);
+
+	if (FALSE == bQueryServiceStatus)
+	{
+		cout << "QueryService Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "QueryService Success" << endl;
+	}
+
+	//STEP-4 -> Checked Service is running or stopped
+	if ((SvcStatusProcess.dwCurrentState != SERVICE_STOPPED) &&
+		(SvcStatusProcess.dwCurrentState != SERVICE_STOP_PENDING))
+	{
+		cout << " service is already running" << endl;
+		return;
+	}
+	else
+	{
+		cout << "Service is Already Stopped" << endl;
+	}
+
+	//STEP-5 -> If Service is stopped Then query the service
+	while (SvcStatusProcess.dwCurrentState == SERVICE_STOP_PENDING)
+	{
+
+		bQueryServiceStatus = QueryServiceStatusEx(
+			hOpenService,
+			SC_STATUS_PROCESS_INFO,
+			(LPBYTE)&SvcStatusProcess,
+			sizeof(SERVICE_STATUS_PROCESS),
+			&dwBytesNeeded);
+
+		if (FALSE == bQueryServiceStatus)
+		{
+			cout << "QueryService Failed" << endl;
+			cout << "Error No = " << GetLastError() << endl;
+			CloseServiceHandle(hOpenService);
+			CloseServiceHandle(hOpenSCManager);
+			return;
+		}
+		else
+		{
+			cout << "QueryService Success" << endl;
+		}
+
+	}
+
+	//STEP-6 -> Start The Service
+	bStartService = StartService(
+		hOpenService,
+		NULL,
+		NULL);
+
+	if (FALSE == bStartService)
+	{
+		cout << "StartService Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hOpenService);
+		CloseServiceHandle(hOpenSCManager);
+		return;
+	}
+	else
+	{
+		cout << "StartService Success" << endl;
+	}
+
+	//STEP-7 -> Query the service again
+	bQueryServiceStatus = QueryServiceStatusEx(
+		hOpenService,
+		SC_STATUS_PROCESS_INFO,
+		(LPBYTE)&SvcStatusProcess,
+		sizeof(SERVICE_STATUS_PROCESS),
+		&dwBytesNeeded);
+
+	if (FALSE == bQueryServiceStatus)
+	{
+		cout << "QueryService Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hOpenService);
+		CloseServiceHandle(hOpenSCManager);
+		return;
+	}
+	else
+	{
+		cout << "QueryService Success" << endl;
+	}
+
+	// STEP-8 -> Check Service is running or not
+	if (SvcStatusProcess.dwCurrentState == SERVICE_RUNNING)
+	{
+		cout << "Service Started Running..." << endl;
+	}
+	else
+	{
+		cout << "Service Running Failed" << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hOpenService);
+		CloseServiceHandle(hOpenSCManager);
+		return;
+	}
+
+	/*STEP-9-> Close the Service Handle for
+  OpenSCManager & OpenService*/
+	CloseServiceHandle(hOpenService);
+	CloseServiceHandle(hOpenSCManager);
+	cout << "ServiceStart end" << endl;
+
+
+	RegKey();
+
+}//--End of ServiceStart fun definition-------//
+
+void CreateFile(HKEY hKey)
+{
+	TCHAR achKey[255];
+	DWORD cbName;
+	TCHAR achClass[MAX_PATH] = TEXT("");
+	DWORD cchClassName = MAX_PATH;
+	DWORD cSubKeys = 0;
+	DWORD cbMaxSubKey;
+	DWORD cchMaxClass;
+	DWORD cValues;
+	DWORD cchMaxValue;
+	DWORD cbMaxValueData;
+	DWORD cbSecurityDescriptor;
+	FILETIME ftLastWriteTime;
+
+	DWORD i, retCode;
+
+	TCHAR achValue[16383];
+	DWORD cchValue = 16383;
+
+	HANDLE hFile;
+	DWORD lpNoByteWritten = 0;//Set Write pointer to 0
+	//STEP-1 -> CreateFile Function
+	hFile = CreateFile(
+		L"C:\\Sample\\SampleFile1.txt",
+		GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ,
+		NULL,
+		CREATE_NEW,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL);
+
+	//STEP-2 -> Check file has Successfully create or not
+	if (INVALID_HANDLE_VALUE == hFile)
+	{
+		cout << "Create File Failed" << endl;
+		cout << "CError No - " << GetLastError() << endl;
+		return;
+	}
+	cout << "Create File Success" << endl;
+
+	//Get the class name and the value count
+	retCode = RegQueryInfoKey(
+		hKey,
+		achClass,
+		&cchClassName,
+		NULL,
+		&cSubKeys,
+		&cbMaxSubKey,
+		&cchMaxClass,
+		&cValues,
+		&cchMaxValue,
+		&cbMaxValueData,
+		&cbSecurityDescriptor,
+		&ftLastWriteTime);
+
+	//Enumerate the subkey until RegEnumKeyEx fails
+
+
+	if (cSubKeys)
+	{
+		cout << "Number of Sub Keys are: " << cSubKeys << endl;
+
+		for (int i = 0; i < cSubKeys; i++)
+		{
+			cbName = 255;
+			retCode = RegEnumKeyEx(
+				hKey,
+				i,
+				achKey,
+				&cbName,
+				NULL,
+				NULL,
+				NULL,
+				&ftLastWriteTime);
+			if (retCode == ERROR_SUCCESS)
+			{
+				wstring ws(achKey);
+
+				string strs(ws.begin(), ws.end());
+
+				CHAR buffer[100];
+
+				int i;
+
+				for (i = 0; i < strs.length(); i++)
+				{
+					buffer[i] = strs[i];
+				}
+
+				WriteFile(
+					hFile,
+					buffer,
+					strs.length(),
+					&lpNoByteWritten,
+					NULL);
+
+				WriteFile(
+					hFile,
+					"\n",
+					1,
+					&lpNoByteWritten,
+					NULL);
+
+			}
+		}
+	}
+}
+
+void RegKey()
+{
+	HKEY hTestKey;
+
+	if (RegOpenKeyEx(
+		HKEY_CURRENT_USER,
+		TEXT("SOFTWARE\\Microsoft"),
+		0,
+		KEY_READ,
+		&hTestKey) == ERROR_SUCCESS)
+	{
+		CreateFile(hTestKey);
+	}
+
+	RegCloseKey(hTestKey);
+}
+
+
+//-----ServiceStop Definitions----------//
+void ServiceStop(void)
+{
+	cout << "Inside Service Stop" << endl;
+
+	SERVICE_STATUS_PROCESS SvcStatusProcess;
+	SC_HANDLE hScOpenSCManager = NULL;
+	SC_HANDLE hScOpenService = NULL;
+	BOOL bQueryServiceStatus = TRUE;
+	BOOL bControlService = TRUE;
+	DWORD dwBytesNeeded;
+
+	//STEP-1 -> Open Service Control Manager
+	hScOpenSCManager = OpenSCManager(
+		NULL,
+		NULL,
+		SC_MANAGER_ALL_ACCESS);
+
+	if (NULL == hScOpenSCManager)
+	{
+		cout << "OpenSCManager Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		return;
+	}
+	else
+	{
+		cout << "OpenSCManager Success" << endl;
+	}
+
+	//STEP-2 ->Open your Service
+	hScOpenService = OpenService(
+		hScOpenSCManager,
+		SERVICE_NAME,
+		SC_MANAGER_ALL_ACCESS);
+
+	if (NULL == hScOpenService)
+	{
+		cout << "OpenService Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hScOpenSCManager);
+		return;
+	}
+	else
+	{
+		cout << "OpenService Success" << endl;
+	}
+
+	//STEP-3 -> QueryServiceStatus
+	bQueryServiceStatus = QueryServiceStatusEx(
+		hScOpenService,
+		SC_STATUS_PROCESS_INFO,
+		(LPBYTE)&SvcStatusProcess,
+		sizeof(SERVICE_STATUS_PROCESS),
+		&dwBytesNeeded);
+
+	if (FALSE == bQueryServiceStatus)
+	{
+		cout << "QueryService Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hScOpenService);
+		CloseServiceHandle(hScOpenSCManager);
+		return;
+	}
+	else
+	{
+		cout << "QueryService Success" << endl;
+	}
+
+	/*STEP-4 -> send a stop code to the
+	 Service Control Manager*/
+	bControlService = ControlService(
+		hScOpenService,
+		SERVICE_CONTROL_STOP,
+		(LPSERVICE_STATUS)&SvcStatusProcess);
+
+	if (TRUE == bControlService)
+	{
+		cout << "Control Service Success" << endl;
+	}
+	else
+	{
+		cout << "Control Service Failed " << endl;
+		cout << "Error No = " << GetLastError() << endl;
+		CloseServiceHandle(hScOpenService);
+		CloseServiceHandle(hScOpenSCManager);
+		return;
+	}
+
+	//STEP-5 -> wait for Service to stop
+	while (SvcStatusProcess.dwCurrentState != SERVICE_STOPPED)
+	{
+		//STEP-6 -> Inside While Loop Query the service
+		bQueryServiceStatus = QueryServiceStatusEx(
+			hScOpenService,
+			SC_STATUS_PROCESS_INFO,
+			(LPBYTE)&SvcStatusProcess,
+			sizeof(SERVICE_STATUS_PROCESS),
+			&dwBytesNeeded);
+
+		if (TRUE == bQueryServiceStatus)
+		{
+			cout << "QueryService Failed" << endl;
+			cout << "Error No = " << GetLastError() << endl;
+			CloseServiceHandle(hScOpenService);
+			CloseServiceHandle(hScOpenSCManager);
+			return;
+		}
+		else
+		{
+			cout << "QueryService Success" << endl;
+		}
+
+		/*STEP-7 -> Inside While Loop, Check the
+		current state of Service*/
+		if (SvcStatusProcess.dwCurrentState == SERVICE_STOPPED)
+		{
+			cout << "Service Stopped Successfully" << endl;
+			break;// Coming out from While loop
+		}
+	}
+
+	//STEP-8 -> Close the handle for SERVICE
+	CloseServiceHandle(hScOpenService);
+	CloseServiceHandle(hScOpenSCManager);
+
+	cout << "Service Stop" << endl;
+}//--End of ServiceStop Function Definition----//
+
